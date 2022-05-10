@@ -2,6 +2,7 @@
 package mph
 
 import (
+	"math/bits"
 	"sort"
 
 	"github.com/dgryski/go-metro"
@@ -20,12 +21,12 @@ type entry struct {
 
 // New constructs a minimal perfect hash function for the set of keys which returns the index of item in the keys array.
 func New(keys []string) *Table {
-	size := uint64(nextPower2(len(keys)))
+	size := uint64(len(keys))
 
 	h := make([][]entry, size)
 	for idx, k := range keys {
 		hash := metro.Hash64Str(k, 0)
-		i := hash % size
+		i := reducerange(hash, size)
 		// idx+1 so we can identify empty entries in the table with 0
 		h[i] = append(h[i], entry{int32(idx) + 1, hash})
 	}
@@ -46,7 +47,7 @@ func New(keys []string) *Table {
 		for {
 			seed++
 			for _, k := range subkeys {
-				i := xorshiftMult64(k.hash+seed) % size
+				i := reducerange(xorshiftMult64(k.hash+seed), size)
 				if entries[i] == 0 && values[i] == 0 {
 					// looks free, claim it
 					entries[i] = k.idx
@@ -70,10 +71,10 @@ func New(keys []string) *Table {
 		}
 
 		// ... and assign this seed value for every subkey
-		// NOTE(dgryski): While k.hash is different for each entry, i = k.hash % size is the same.
+		// NOTE(dgryski): While k.hash is different for each entry, reducerange(k.hash, size) is the same.
 		// We don't need to loop over the entire slice, we can just take the seed from the first entry.
 
-		i := subkeys[0].hash % size
+		i := reducerange(subkeys[0].hash, size)
 		seeds[i] = int32(seed)
 	}
 
@@ -90,7 +91,7 @@ func New(keys []string) *Table {
 
 	for hidx < len(h) && len(h[hidx]) > 0 {
 		k := h[hidx][0]
-		i := k.hash % size
+		i := reducerange(k.hash, size)
 		hidx++
 
 		// take a free slot
@@ -114,13 +115,13 @@ func New(keys []string) *Table {
 func (t *Table) Query(k string) int32 {
 	size := uint64(len(t.Values))
 	hash := metro.Hash64Str(k, 0)
-	i := hash & (size - 1)
+	i := reducerange(hash, size)
 	seed := t.Seeds[i]
 	if seed < 0 {
 		return t.Values[-seed-1]
 	}
 
-	i = xorshiftMult64(uint64(seed)+hash) & (size - 1)
+	i = reducerange(xorshiftMult64(uint64(seed)+hash), size)
 	return t.Values[i]
 }
 
@@ -131,10 +132,9 @@ func xorshiftMult64(x uint64) uint64 {
 	return x * 2685821657736338717
 }
 
-func nextPower2(n int) int {
-	i := 1
-	for i < n {
-		i *= 2
-	}
-	return i
+// reducerange maps i to an integer in the range [0,n).
+// https://lemire.me/blog/2016/06/27/a-fast-alternative-to-the-modulo-reduction/
+func reducerange(i, n uint64) uint64 {
+	hi, _ := bits.Mul64(i, n)
+	return hi
 }
